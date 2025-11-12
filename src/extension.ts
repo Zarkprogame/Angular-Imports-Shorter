@@ -2,36 +2,43 @@ import * as vscode from 'vscode';
 
 function extractImports(document: vscode.TextDocument, fullText: string) {
 	
-    const importRegex = /^import\s+.*from\s+['"].*['"]\s*;?\s*$|^import\s+['"].*['"]\s*;?\s*$/gm;
+    const importRegEx = /^import\s+.*from\s+['"].*['"]\s*;?\s*$|^import\s+['"].*['"]\s*;?\s*$/gm;
     
-    const importLines = [];
-    const importBlocks = [];
-    let match;
-
-    while ((match = importRegex.exec(fullText)) !== null) {
-        // Almacenamos solo la línea de importación (sin los posibles saltos de línea circundantes)
-        importLines.push(match[0].trim());
-        // Almacenamos la información del match para determinar el rango general
-        importBlocks.push({ index: match.index, length: match[0].length });
-    }
+    // 1. Usar matchAll para obtener todas las coincidencias como un array iterable.
+    const matches = Array.from(fullText.matchAll(importRegEx));
     
-    if (importBlocks.length === 0) {
-        return { importLines: [], nonImportContent: fullText, importRange: new vscode.Range(0, 0, 0, 0) };
+    // Si no hay coincidencias, devolvemos el caso base.
+    if (matches.length === 0) {
+        return { importLines: [], importRange: new vscode.Range(0, 0, 0, 0) };
     }
 
-    // Calcular el rango total que ocupan todas las importaciones
-    const firstImport = importBlocks[0];
-    const lastImport = importBlocks[importBlocks.length - 1];
+    const importLines = matches.map(
+        match => match[0].trim()
+    );
 
-    const startPosition = document.positionAt(firstImport.index);
-    const endPosition = document.positionAt(lastImport.index + lastImport.length);
+    // 2. Calcular el rango de inicio y fin (usando la primera y la última coincidencia)
+    
+    // Primera coincidencia (para el punto de inicio)
+    const firstMatch = matches[0];
+    const startIndex = firstMatch.index!;
 
+    // Última coincidencia (para el punto de fin)
+    const lastMatch = matches[matches.length - 1];
+    const endIndex = lastMatch.index! + lastMatch[0].length;
+
+    // 3. Mapear los índices de carácter a las posiciones de VS Code
+    const startPosition = document.positionAt(startIndex);
+    const endPosition = document.positionAt(endIndex);
+
+    // 4. Crear el objeto de rango
     const importRange = new vscode.Range(startPosition, endPosition);
 
-    return { importLines, nonImportContent: '', importRange };
+    // Devolvemos las líneas limpias y el rango de reemplazo
+    return { importLines, importRange };
 }
 
 function classifyAndSort(lines: string[]): string[] {
+
     const groups: { [key: string]: string[] } = {
         angular: [], // 1. @angular y librerías de terceros (rxjs, lodash, etc.)
         app: [],     // 2. Alias de la aplicación (@app/, @core/, etc.)
@@ -39,18 +46,16 @@ function classifyAndSort(lines: string[]): string[] {
     };
 
     // 1. CLASIFICACIÓN
-    const appAliasRegex = /^import\s+.*from\s+['"]@\w+.*['"]/; // Asumimos que @alias/ es tu convención
+    const appAliasRegEx = /^import\s+.*from\s+['"]@\w+.*['"]/;
     
     lines.forEach(line => {
         if (line.includes('from \'./') || line.includes('from "../') || line.startsWith('import \'./') || line.startsWith('import \'../')) {
             groups.relative.push(line);
         } else if (line.includes('from \'@angular/')) {
             groups.angular.push(line);
-        } else if (appAliasRegex.test(line)) {
-            // Captura otros alias de la app como @core, @shared, etc.
+        } else if (appAliasRegEx.test(line)) {
             groups.app.push(line);
         } else {
-            // Cualquier otra librería de terceros (rxjs, ngrx, etc.) cae aquí
             groups.angular.push(line);
         }
     });
@@ -61,7 +66,6 @@ function classifyAndSort(lines: string[]): string[] {
     groups.relative.sort();
 
     // 3. CONSTRUCCIÓN DEL BLOQUE FINAL
-    // El orden es: angular -> línea vacía -> app -> línea vacía -> relative
     const sortedBlock: string[] = [];
 
     // Grupo 1: Angular y Terceros
@@ -72,7 +76,7 @@ function classifyAndSort(lines: string[]): string[] {
     // Grupo 2: Alias de la Aplicación (separado por una línea vacía)
     if (groups.app.length > 0) {
         if (sortedBlock.length > 0) {
-            sortedBlock.push(''); // Salto de línea
+            sortedBlock.push('');
         }
         sortedBlock.push(...groups.app);
     }
@@ -80,15 +84,21 @@ function classifyAndSort(lines: string[]): string[] {
     // Grupo 3: Relativas (separado por una línea vacía)
     if (groups.relative.length > 0) {
         if (sortedBlock.length > 0) {
-            sortedBlock.push(''); // Salto de línea
+            sortedBlock.push('');
         }
         sortedBlock.push(...groups.relative);
+    }
+
+    // Salto de linea final
+    if (sortedBlock.length > 0 && sortedBlock[sortedBlock.length - 1] !== '') {
+        sortedBlock.push('');
     }
 
     return sortedBlock;
 }
 
 function sortAngularImports() {
+
     // 1. Verificar si hay un editor de texto activo
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
@@ -105,11 +115,8 @@ function sortAngularImports() {
 
     const fullText = document.getText();
 
-    // ===================================================================
-    // 3. Implementación del Algoritmo de Clasificación (El Corazón de la Lógica)
-    // ===================================================================
-
-    const { importLines, nonImportContent, importRange } = extractImports(document, fullText);
+    // 3. Implementación del Algoritmo de Clasificación
+    const { importLines, importRange } = extractImports(document, fullText);
 
     if (importLines.length === 0) {
         vscode.window.showInformationMessage('No se encontraron importaciones para ordenar.');
@@ -139,11 +146,10 @@ export function activate(context: vscode.ExtensionContext) {
 	console.log('Tu extensión "Angular Import Sorter" está activa!');
 
     let disposable = vscode.commands.registerCommand('angular-sorter.sortImports', () => {
-        sortAngularImports(); // Llamamos a nuestra nueva función de lógica
+        sortAngularImports();
     });
 
     context.subscriptions.push(disposable);
 }
 
-// This method is called when your extension is deactivated
 export function deactivate() {}
